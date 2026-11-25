@@ -1,0 +1,7 @@
+"VARIABLENAME","VARIABLE DESCRIPTION"
+"ID","Unique ID for each row"
+"SOURCE_LANG","Language code of the source text, i.e. the language being translated from"
+"TARGET_LANG","Language code of the target text, i.e. the language being translated into"
+"SOURCE_TEXT","The text in the source language that is to be translated"
+"TARGET_TEXT","This is what you are predicting: the translation of SOURCE_TEXT into TARGET_LANG (provided in the Train set only)"
+"VERSE_KEY","Reference identifying the verse the text comes from (e.g. book, chapter and verse), linking parallel texts of the same verse across languages"
