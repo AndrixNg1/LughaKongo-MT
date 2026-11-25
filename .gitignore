@@ -2,5 +2,7 @@
 __pycache__/
 .ipynb_checkpoints/
 outputs/
+data/raw/*
+!data/raw/.gitkeep
 *.pt
 *.safetensors

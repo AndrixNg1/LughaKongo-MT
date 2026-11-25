@@ -18,6 +18,6 @@ Le notebook de départ fourni se trouve dans `notebooks/`. Il devra être vérif
 
 ## Pour commencer
 
-L'équipe peut utiliser Google Colab pour exécuter les notebooks avec un GPU. Les fichiers CSV dans `data/raw/` ne sont pas envoyés sur GitHub : chaque membre devra les télécharger depuis Zindi, sauf si les règles du défi autorisent leur partage. Les fichiers générés et les modèles sont également exclus du dépôt.
+L'équipe peut utiliser Google Colab pour exécuter les notebooks avec un GPU. Les fichiers originaux dans `data/raw/` sont ignorés par Git. Les fichiers préparés dans `data/processed/` peuvent être partagés dans le dépôt privé ; les modèles et résultats dans `outputs/` restent exclus.
 
-Le fichier de validation officiel n'est pas encore présent dans le projet. Nous devrons le récupérer ou définir une validation avant de comparer les modèles.
+Le fichier de validation officiel n'est pas encore présent. Une validation provisoire a été créée en séparant les versets du jeu d'entraînement : les deux directions et les langues partageant une même référence restent dans le même ensemble.
