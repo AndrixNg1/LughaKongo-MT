@@ -46,15 +46,20 @@ def read_rows(path, labeled=False):
 def initialize_tokenizer(tokenizer, model, family):
     if family == "nllb":
         tokens = [TAGS[lang] for lang in sorted(LANGS - {"fr"})]
-        existing = list(tokenizer.additional_special_tokens or [])
-        new_tokens = [token for token in tokens if token not in set(existing)]
+        current_special = getattr(tokenizer, "additional_special_tokens", None)
+        if current_special is None:
+            current_special = getattr(tokenizer, "all_special_tokens", []) or []
+        existing = set(current_special)
+        new_tokens = [t for t in tokens if t not in existing]
+        added = 0
         if new_tokens:
-            tokenizer.add_special_tokens({"additional_special_tokens": existing + new_tokens})
-        model.resize_token_embeddings(len(tokenizer))
+            added = tokenizer.add_special_tokens({"additional_special_tokens": new_tokens})
+        if added > 0:
+            model.resize_token_embeddings(len(tokenizer))
         for tag in TAGS.values():
-            if tokenizer.convert_tokens_to_ids(tag) == tokenizer.unk_token_id:
+            token_id = tokenizer.convert_tokens_to_ids(tag)
+            if token_id is None or token_id == tokenizer.unk_token_id:
                 raise ValueError(f"Missing language token: {tag}")
-
 
 def encode(row, tokenizer, config, labeled=True):
     src, tgt = row["SOURCE_LANG"], row["TARGET_LANG"]
