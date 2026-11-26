@@ -1,0 +1,19 @@
+{
+  "model_name": "facebook/nllb-200-distilled-600M",
+  "model_family": "nllb",
+  "train_file": "data/processed/Train.csv",
+  "validation_file": "data/processed/Val.csv",
+  "test_file": "data/processed/Test.csv",
+  "sample_file": "data/processed/SampleSubmission.csv",
+  "checkpoint_dir": "outputs/checkpoints",
+  "model_dir": "outputs/best_model",
+  "submission_file": "outputs/submission.csv",
+  "max_source_length": 128,
+  "max_target_length": 128,
+  "batch_size": 4,
+  "gradient_accumulation_steps": 4,
+  "learning_rate": 0.00005,
+  "epochs": 3,
+  "num_beams": 4,
+  "seed": 42
+}
