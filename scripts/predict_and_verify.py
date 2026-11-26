@@ -3,6 +3,7 @@
 import argparse
 import csv
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from common import generate, load_config, read_rows
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/baseline_nllb.json")
+    parser.add_argument("--drive_backup_dir", default=None)
     args = parser.parse_args()
     cfg = load_config(args.config)
     rows = read_rows(cfg["test_file"])
@@ -59,6 +61,16 @@ def main():
         if temporary is not None and temporary.exists():
             temporary.unlink()
     print(f"Saved {len(ids)} translations to {output}")
+    backup_dir = args.drive_backup_dir or cfg.get("drive_backup_dir")
+    if backup_dir:
+        backup_path = Path(backup_dir)
+        backup_path.mkdir(parents=True, exist_ok=True)
+        destination = backup_path / output.name
+        if output.resolve() == destination.resolve():
+            print(f"Submission already in backup directory: {destination}")
+        else:
+            shutil.copy2(output, destination)
+            print(f"Submission backup: {destination}")
 
 
 if __name__ == "__main__":
