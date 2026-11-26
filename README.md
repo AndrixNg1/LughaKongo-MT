@@ -37,3 +37,23 @@ Dans une cellule Colab, préfixer chaque commande par `!` après s'être placé 
 La configuration utilise NLLB-200 distilled 600M. Pour expérimenter avec `google/byt5-small` ou `google/mt5-small`, modifier `model_name` et définir `model_family` à `t5`, puis réentraîner avant la prédiction. Utiliser la même configuration pour l'entraînement et la prédiction ; les modèles et les checkpoints des expériences ne doivent pas être mélangés. Pour NLLB, cinq nouveaux jetons de langue sont appris pendant l'entraînement : leur qualité reste à mesurer.
 
 La sélection du modèle se fait avec chrF++ sur la validation ; BLEU avec tokenisation par espaces est également affiché. Les scores locaux peuvent différer du classement officiel. La soumission est contrôlée et reprend les ID et leur ordre du modèle fourni. Une traduction vide interrompt le programme pour permettre une correction avant la soumission.
+
+### Configuration T4 et sauvegarde Drive
+
+Dans Colab, sélectionner le GPU T4, cloner ou ouvrir le dépôt, puis monter Drive :
+
+```python
+from google.colab import drive
+drive.mount('/content/drive')
+```
+
+Depuis la racine du dépôt, exécuter :
+
+```bash
+!nvidia-smi
+!pip install -r requirements.txt
+!python scripts/train.py --config configs/nllb_tuned.json --drive_backup_dir /content/drive/MyDrive/LughaKongo-MT/experiment_01
+!python scripts/predict_and_verify.py --config configs/nllb_tuned.json --drive_backup_dir /content/drive/MyDrive/LughaKongo-MT/experiment_01
+```
+
+Chaque amélioration est enregistrée dans un nouveau dossier `best_model_step_<step>` sur Drive. Choisir un nouveau dossier d'expérience à chaque nouvel entraînement pour éviter les collisions. Ces sauvegardes contiennent le modèle et le tokenizer pour l'inférence, pas l'état complet de l'optimiseur pour reprendre l'entraînement. La soumission est copiée sur Drive après vérification. La configuration est un point de départ : comparer les scores de validation avant de conclure qu'elle améliore le résultat.

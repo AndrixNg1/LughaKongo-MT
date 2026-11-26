@@ -3,7 +3,6 @@
 import csv
 import json
 from collections import defaultdict
-from pathlib import Path
 
 LANGS = {"fr", "shr", "ngc", "yns", "tap", "hav"}
 TAGS = {"fr": "fra_Latn", **{lang: f"{lang}_Latn" for lang in LANGS - {"fr"}}}
@@ -110,8 +109,9 @@ def generate(rows, model, tokenizer, config):
     predictions = [None] * len(rows)
     model.eval()
     for target, group in groups.items():
-        for start in range(0, len(group), config["batch_size"]):
-            chunk = group[start : start + config["batch_size"]]
+        batch_size = config.get("generation_batch_size", config["batch_size"])
+        for start in range(0, len(group), batch_size):
+            chunk = group[start : start + batch_size]
             encoded = [
                 encode(row, tokenizer, config, labeled=False) for _, row in chunk
             ]
@@ -121,6 +121,7 @@ def generate(rows, model, tokenizer, config):
             kwargs = {
                 "max_new_tokens": config["max_target_length"],
                 "num_beams": config["num_beams"],
+                "no_repeat_ngram_size": config.get("no_repeat_ngram_size", 0),
             }
             if config["model_family"] == "nllb":
                 kwargs["forced_bos_token_id"] = tokenizer.convert_tokens_to_ids(
