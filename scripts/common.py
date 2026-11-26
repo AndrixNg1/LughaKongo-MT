@@ -46,10 +46,10 @@ def read_rows(path, labeled=False):
 def initialize_tokenizer(tokenizer, model, family):
     if family == "nllb":
         tokens = [TAGS[lang] for lang in sorted(LANGS - {"fr"})]
-        tokenizer.add_special_tokens(
-            {"additional_special_tokens": tokens},
-            replace_additional_special_tokens=False,
-        )
+        existing = list(tokenizer.additional_special_tokens or [])
+        new_tokens = [token for token in tokens if token not in set(existing)]
+        if new_tokens:
+            tokenizer.add_special_tokens({"additional_special_tokens": existing + new_tokens})
         model.resize_token_embeddings(len(tokenizer))
         for tag in TAGS.values():
             if tokenizer.convert_tokens_to_ids(tag) == tokenizer.unk_token_id:
