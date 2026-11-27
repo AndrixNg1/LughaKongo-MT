@@ -1,6 +1,7 @@
 """Train one multilingual model; run from the repository root."""
 
 import argparse
+import math
 from pathlib import Path
 
 import sacrebleu
@@ -14,6 +15,7 @@ from transformers import (
     set_seed,
 )
 from common import encode, generate, initialize_tokenizer, load_config, read_rows
+from transformers.trainer_utils import get_last_checkpoint
 
 
 class EncodedDataset:
@@ -91,8 +93,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/baseline_nllb.json")
     parser.add_argument("--drive_backup_dir", default=None)
+    parser.add_argument("--output_dir", default=None, help="Override checkpoint directory")
+    parser.add_argument("--model_dir", default=None, help="Override final best-model directory")
+    parser.add_argument("--resume_from_checkpoint", default="auto", help="auto, none, or a checkpoint path")
     args = parser.parse_args()
     cfg = load_config(args.config)
+    if args.model_dir:
+        cfg["model_dir"] = args.model_dir
     set_seed(cfg["seed"])
     train = read_rows(cfg["train_file"], labeled=True)
     validation = read_rows(cfg["validation_file"], labeled=True)
@@ -104,16 +111,30 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(cfg["model_name"])
     model = AutoModelForSeq2SeqLM.from_pretrained(cfg["model_name"])
     initialize_tokenizer(tokenizer, model, cfg["model_family"])
-    gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
-    use_fp16 = "T4" in gpu_name.upper() and cfg["model_family"] == "nllb"
-    print(f"Device: {gpu_name}; fp16: {use_fp16}")
-    checkpointing = cfg.get("gradient_checkpointing", False)
+    cuda = torch.cuda.is_available()
+    gpu_name = torch.cuda.get_device_name(0) if cuda else "CPU"
+    # Keep the previously documented conservative FP32 behaviour for mT5/ByT5.
+    use_bf16 = cuda and cfg["model_family"] == "nllb" and torch.cuda.is_bf16_supported()
+    use_fp16 = cuda and cfg["model_family"] == "nllb" and not use_bf16
+    print(f"Device: {gpu_name}; bf16: {use_bf16}; fp16: {use_fp16}")
+    checkpointing = cfg.get("gradient_checkpointing", True)
     if checkpointing:
         model.config.use_cache = False
+    checkpoint_dir = args.output_dir or cfg["checkpoint_dir"]
+    interval = cfg.get("eval_save_steps", 1000)
+    if not isinstance(interval, int) or interval < 1:
+        raise ValueError("eval_save_steps must be a positive integer")
+    batch_size = cfg["batch_size"]
+    accumulation = cfg["gradient_accumulation_steps"]
+    # Trainer runs on one Colab GPU; warmup_steps avoids deprecated warmup_ratio.
+    updates_per_epoch = max(1, math.ceil(len(train) / batch_size) // accumulation)
+    warmup_steps = int(math.ceil(updates_per_epoch * cfg["epochs"] * cfg.get("warmup_ratio", 0.06)))
     training_args = Seq2SeqTrainingArguments(
-        output_dir=cfg["checkpoint_dir"],
-        eval_strategy="epoch",
-        save_strategy="epoch",
+        output_dir=checkpoint_dir,
+        eval_strategy="steps",
+        save_strategy="steps",
+        eval_steps=interval,
+        save_steps=interval,
         learning_rate=cfg["learning_rate"],
         num_train_epochs=cfg["epochs"],
         per_device_train_batch_size=cfg["batch_size"],
@@ -121,16 +142,21 @@ def main():
         gradient_accumulation_steps=cfg["gradient_accumulation_steps"],
         seed=cfg["seed"],
         load_best_model_at_end=True,
-        metric_for_best_model="chrf",
+        metric_for_best_model="eval_chrf",
         greater_is_better=True,
         save_total_limit=2,
         report_to="none",
         logging_steps=50,
         fp16=use_fp16,
+        bf16=use_bf16,
         gradient_checkpointing=checkpointing,
-        lr_scheduler_type=cfg.get("lr_scheduler_type", "linear"),
-        warmup_ratio=cfg.get("warmup_ratio", 0.0),
-        label_smoothing_factor=cfg.get("label_smoothing_factor", 0.0),
+        gradient_checkpointing_kwargs={"use_reentrant": False} if checkpointing else None,
+        group_by_length=True,
+        dataloader_num_workers=cfg.get("dataloader_num_workers", 2),
+        lr_scheduler_type=cfg.get("lr_scheduler_type", "cosine"),
+        warmup_steps=warmup_steps,
+        label_smoothing_factor=cfg.get("label_smoothing_factor", 0.1),
+        weight_decay=cfg.get("weight_decay", 0.01),
     )
     trainer = MultilingualTrainer(
         model=model,
@@ -143,7 +169,13 @@ def main():
         pipeline_config=cfg,
         drive_backup_dir=args.drive_backup_dir or cfg.get("drive_backup_dir"),
     )
-    trainer.train()
+    resume = args.resume_from_checkpoint
+    if resume == "auto":
+        resume = get_last_checkpoint(checkpoint_dir) if Path(checkpoint_dir).is_dir() else None
+    elif resume.lower() == "none":
+        resume = None
+    print(f"Checkpoint directory: {checkpoint_dir}; resume: {resume or 'new run'}")
+    trainer.train(resume_from_checkpoint=resume)
     Path(cfg["model_dir"]).mkdir(parents=True, exist_ok=True)
     trainer.save_model(cfg["model_dir"])
     tokenizer.save_pretrained(cfg["model_dir"])

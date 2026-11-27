@@ -15,8 +15,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/baseline_nllb.json")
     parser.add_argument("--drive_backup_dir", default=None)
+    parser.add_argument("--model_dir", default=None, help="Override trained model directory")
     args = parser.parse_args()
     cfg = load_config(args.config)
+    if args.model_dir:
+        cfg["model_dir"] = args.model_dir
     rows = read_rows(cfg["test_file"])
     with open(cfg["sample_file"], encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
