@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import json
 import os
 import shutil
 import tempfile
@@ -20,6 +21,15 @@ def main():
     cfg = load_config(args.config)
     if args.model_dir:
         cfg["model_dir"] = args.model_dir
+    metadata = Path(cfg["model_dir"]) / "training_config.json"
+    if metadata.is_file():
+        with metadata.open(encoding="utf-8") as f:
+            trained = json.load(f)
+        for key in ("model_name", "model_family"):
+            if trained.get(key) != cfg.get(key):
+                raise ValueError(f"Model/config mismatch for {key}: {trained.get(key)} != {cfg.get(key)}")
+    else:
+        print("Warning: no training_config.json; model/config compatibility is not verified.")
     rows = read_rows(cfg["test_file"])
     with open(cfg["sample_file"], encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)

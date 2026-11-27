@@ -109,6 +109,8 @@ def generate(rows, model, tokenizer, config):
     predictions = [None] * len(rows)
     model.eval()
     for target, group in groups.items():
+        # Similar-length sources reduce padding while retaining original output order.
+        group.sort(key=lambda item: len(item[1]["SOURCE_TEXT"]))
         batch_size = config.get("generation_batch_size", config["batch_size"])
         for start in range(0, len(group), batch_size):
             chunk = group[start : start + batch_size]
@@ -122,6 +124,7 @@ def generate(rows, model, tokenizer, config):
                 "max_new_tokens": config["max_target_length"],
                 "num_beams": config["num_beams"],
                 "no_repeat_ngram_size": config.get("no_repeat_ngram_size", 0),
+                "use_cache": True,
             }
             if config["model_family"] == "nllb":
                 kwargs["forced_bos_token_id"] = tokenizer.convert_tokens_to_ids(

@@ -1,6 +1,7 @@
 """Train one multilingual model; run from the repository root."""
 
 import argparse
+import json
 import math
 from pathlib import Path
 
@@ -29,6 +30,25 @@ class EncodedDataset:
         return self.items[index]
 
 
+class TranslationCollator(DataCollatorForSeq2Seq):
+    """Supply decoder inputs when M2M100 lacks the label-shifting helper."""
+
+    def __call__(self, features, return_tensors=None):
+        batch = super().__call__(features, return_tensors=return_tensors)
+        if (self.model is not None and self.model.config.model_type == "m2m_100"
+                and "labels" in batch and "decoder_input_ids" not in batch):
+            labels = batch["labels"]
+            pad_id = self.model.config.pad_token_id
+            start_id = self.model.config.decoder_start_token_id
+            if pad_id is None or start_id is None:
+                raise ValueError("The model must define pad_token_id and decoder_start_token_id")
+            decoder_inputs = labels.new_full(labels.shape, pad_id)
+            decoder_inputs[:, 0] = start_id
+            decoder_inputs[:, 1:] = labels[:, :-1].masked_fill(labels[:, :-1] == -100, pad_id)
+            batch["decoder_input_ids"] = decoder_inputs
+        return batch
+
+
 class MultilingualTrainer(Seq2SeqTrainer):
     def __init__(self, *args, validation_rows, pipeline_config, drive_backup_dir=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -46,12 +66,17 @@ class MultilingualTrainer(Seq2SeqTrainer):
             metric_key_prefix=metric_key_prefix,
             **kwargs,
         )
-        predictions = generate(
-            self.validation_rows,
-            self.model,
-            self.processing_class,
-            self.pipeline_config,
-        )
+        try:
+            predictions = list(generate(
+                self.validation_rows,
+                self.model,
+                self.processing_class,
+                self.pipeline_config,
+            ))
+            if len(predictions) != len(self.validation_rows) or any(not isinstance(p, str) for p in predictions):
+                raise ValueError("Predictions must contain one string per validation row")
+        except Exception as exc:
+            raise RuntimeError(f"Validation generation failed at step {self.state.global_step}") from exc
         references = [row["TARGET_TEXT"] for row in self.validation_rows]
         metrics[f"{metric_key_prefix}_chrf"] = sacrebleu.corpus_chrf(
             predictions, [references], word_order=2
@@ -96,6 +121,7 @@ def main():
     parser.add_argument("--output_dir", default=None, help="Override checkpoint directory")
     parser.add_argument("--model_dir", default=None, help="Override final best-model directory")
     parser.add_argument("--resume_from_checkpoint", default="auto", help="auto, none, or a checkpoint path")
+    parser.add_argument("--smoke_test_steps", type=int, default=0, help="Run a few training steps without saving a final model")
     args = parser.parse_args()
     cfg = load_config(args.config)
     if args.model_dir:
@@ -114,7 +140,9 @@ def main():
     cuda = torch.cuda.is_available()
     gpu_name = torch.cuda.get_device_name(0) if cuda else "CPU"
     # Keep the previously documented conservative FP32 behaviour for mT5/ByT5.
-    use_bf16 = cuda and cfg["model_family"] == "nllb" and torch.cuda.is_bf16_supported()
+    use_bf16 = (cuda and cfg["model_family"] == "nllb"
+                and torch.cuda.get_device_capability(0)[0] >= 8
+                and torch.cuda.is_bf16_supported())
     use_fp16 = cuda and cfg["model_family"] == "nllb" and not use_bf16
     print(f"Device: {gpu_name}; bf16: {use_bf16}; fp16: {use_fp16}")
     checkpointing = cfg.get("gradient_checkpointing", True)
@@ -129,6 +157,12 @@ def main():
     # Trainer runs on one Colab GPU; warmup_steps avoids deprecated warmup_ratio.
     updates_per_epoch = max(1, math.ceil(len(train) / batch_size) // accumulation)
     warmup_steps = int(math.ceil(updates_per_epoch * cfg["epochs"] * cfg.get("warmup_ratio", 0.06)))
+    if args.smoke_test_steps < 0:
+        parser.error("--smoke_test_steps must be nonnegative")
+    if args.smoke_test_steps and args.resume_from_checkpoint != "none":
+        parser.error("A smoke test requires --resume_from_checkpoint none")
+    if args.smoke_test_steps >= interval:
+        parser.error("Smoke-test steps must be smaller than eval_save_steps")
     training_args = Seq2SeqTrainingArguments(
         output_dir=checkpoint_dir,
         eval_strategy="steps",
@@ -145,6 +179,7 @@ def main():
         metric_for_best_model="eval_chrf",
         greater_is_better=True,
         save_total_limit=2,
+        max_steps=args.smoke_test_steps if args.smoke_test_steps else -1,
         report_to="none",
         logging_steps=50,
         fp16=use_fp16,
@@ -157,6 +192,7 @@ def main():
         warmup_steps=warmup_steps,
         label_smoothing_factor=cfg.get("label_smoothing_factor", 0.1),
         weight_decay=cfg.get("weight_decay", 0.01),
+        optim=cfg.get("optim", "adamw_torch"),
     )
     trainer = MultilingualTrainer(
         model=model,
@@ -164,7 +200,7 @@ def main():
         processing_class=tokenizer,
         train_dataset=EncodedDataset(train, tokenizer, cfg),
         eval_dataset=EncodedDataset(validation, tokenizer, cfg),
-        data_collator=DataCollatorForSeq2Seq(tokenizer, model=model),
+        data_collator=TranslationCollator(tokenizer, model=model),
         validation_rows=validation,
         pipeline_config=cfg,
         drive_backup_dir=args.drive_backup_dir or cfg.get("drive_backup_dir"),
@@ -176,9 +212,17 @@ def main():
         resume = None
     print(f"Checkpoint directory: {checkpoint_dir}; resume: {resume or 'new run'}")
     trainer.train(resume_from_checkpoint=resume)
+    if args.smoke_test_steps:
+        sample = generate(validation[:2], trainer.model, tokenizer, cfg)
+        if len(sample) != min(2, len(validation)) or any(not isinstance(p, str) for p in sample):
+            raise RuntimeError("Smoke test generation did not return the expected strings")
+        print("Smoke test training and generation finished; no final model saved.")
+        return
     Path(cfg["model_dir"]).mkdir(parents=True, exist_ok=True)
     trainer.save_model(cfg["model_dir"])
     tokenizer.save_pretrained(cfg["model_dir"])
+    with (Path(cfg["model_dir"]) / "training_config.json").open("w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
     print(f"Best model saved to {cfg['model_dir']}")
 
 
