@@ -1,6 +1,7 @@
-torch>=2.1
-transformers>=4.45,<5
-accelerate>=0.34
+torch>=2.6
+transformers==4.57.3
+accelerate>=1.0,<2
 sentencepiece>=0.2
 sacrebleu>=2.4,<3
 numpy>=1.26
+protobuf>=3.20,<7
